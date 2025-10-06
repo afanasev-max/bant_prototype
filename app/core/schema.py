@@ -19,7 +19,7 @@ class Authority(BaseModel):
     risks: Optional[List[str]] = None
 
 class Need(BaseModel):
-    pain_points: Optional[conlist(str, min_length=1)] = None
+    pain_points: Optional[List[str]] = None
     current_solution: Optional[str] = None
     success_criteria: Optional[List[str]] = None
     priority: Optional[Literal["low", "medium", "high", "critical"]] = None

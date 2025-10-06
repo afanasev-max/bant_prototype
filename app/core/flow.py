@@ -13,8 +13,26 @@ class BantFlow:
     def next_slot(self, state: SessionState) -> str | None:
         for s in state.required_slots:
             block = getattr(state.record, s)
+            block_data = block.model_dump()
+            
             # Проверяем, есть ли хотя бы одно непустое значение
-            if not any(v is not None and v != "" and v != [] for v in block.model_dump().values()):
+            has_data = any(v is not None and v != "" and v != [] for v in block_data.values())
+            
+            # Дополнительная проверка для каждого типа данных
+            if s == "budget":
+                # Для бюджета считаем заполненным если have_budget не None (даже если false)
+                has_data = block_data.get("have_budget") is not None
+            elif s == "authority":
+                # Для authority считаем заполненным если есть decision_maker (даже если "не знаем")
+                has_data = block_data.get("decision_maker") is not None
+            elif s == "need":
+                # Для need считаем заполненным если есть pain_points (даже если пустой список)
+                has_data = block_data.get("pain_points") is not None
+            elif s == "timing":
+                # Для timing считаем заполненным если есть timeframe (даже если "unknown")
+                has_data = block_data.get("timeframe") is not None
+            
+            if not has_data:
                 return s
         return None
 
@@ -48,8 +66,8 @@ class BantFlow:
             # Бюджет не упоминался вообще - не заполнено
             budget_score = 0
         elif record.budget.have_budget is False:
-            # Явно указано, что бюджета нет
-            budget_score = 2
+            # Явно указано, что бюджета нет - это валидный ответ
+            budget_score = 8
         elif record.budget.amount_min and record.budget.amount_max and record.budget.currency:
             # Полная информация о бюджете
             budget_score = 22
@@ -67,7 +85,11 @@ class BantFlow:
             if record.authority.decision_process:
                 authority_score += 3
         elif record.authority.decision_maker:
-            authority_score = 5
+            # Есть ЛПР, но нет stakeholders
+            authority_score = 12
+        elif record.authority.decision_maker == "не знаем" or record.authority.decision_maker == "не определились":
+            # Явно указано, что ЛПР не определен - это валидный ответ
+            authority_score = 6
 
         # Need scoring (0-30)
         need_score = 0
@@ -77,7 +99,11 @@ class BantFlow:
             if (record.need.current_solution and 
                 record.need.priority in ['high', 'critical']):
                 need_score += 5
-        elif record.need.pain_points or record.need.success_criteria:
+        elif record.need.pain_points and len(record.need.pain_points) > 0:
+            # Есть конкретные проблемы
+            need_score = 12
+        elif record.need.pain_points is not None and len(record.need.pain_points) == 0:
+            # Явно указано, что проблем нет - это валидный ответ
             need_score = 8
 
         # Timing scoring (0-20)
@@ -89,7 +115,10 @@ class BantFlow:
         elif record.timing.deadline:
             # Простая проверка на ближайший дедлайн
             timing_score = 15
-        elif record.timing.timeframe == 'unknown' or not record.timing.timeframe:
+        elif record.timing.timeframe == 'unknown':
+            # Явно указано, что сроки неопределенные - это валидный ответ
+            timing_score = 6
+        elif not record.timing.timeframe:
             timing_score = 2
 
         total = budget_score + authority_score + need_score + timing_score
@@ -137,23 +166,27 @@ class BantFlow:
             
         except (json.JSONDecodeError, ValidationError, KeyError):
             # Fallback на эвристические вопросы
-            return self._heuristic_followups(score)
+            return self._heuristic_followups(score, record)
 
-    def _heuristic_followups(self, score: BantScore) -> list[str]:
-        """Эвристическая генерация followup вопросов"""
+    def _heuristic_followups(self, score: BantScore, record: BantRecord) -> list[str]:
+        """Эвристическая генерация followup вопросов с проверкой на повторные вопросы"""
         followups = []
         
-        if score.budget.value < 12:
-            followups.append("Какой у вас бюджет на решение этой задачи?")
+        # Budget: задаем вопрос только если have_budget=null (неопределенно)
+        if score.budget.value < 12 and record.budget.have_budget is None:
+            followups.append("Какой бюджет у клиента на проект?")
         
-        if score.authority.value < 12:
-            followups.append("Кто принимает финальное решение о покупке?")
+        # Authority: задаем вопрос только если decision_maker=null
+        if score.authority.value < 12 and record.authority.decision_maker is None:
+            followups.append("Кто у клиента принимает финальное решение?")
         
-        if score.need.value < 15:
-            followups.append("Какие основные проблемы вы хотите решить?")
+        # Need: задаем вопрос только если pain_points=null (неопределенно)
+        if score.need.value < 15 and record.need.pain_points is None:
+            followups.append("Какие основные проблемы у заказчика?")
         
-        if score.timing.value < 8:
-            followups.append("Когда планируете начать внедрение?")
+        # Timing: задаем вопрос только если timeframe=null
+        if score.timing.value < 8 and record.timing.timeframe is None:
+            followups.append("Когда клиент планирует запуск?")
         
         return followups[:2]
 
