@@ -4,6 +4,7 @@ from typing import List, Optional, Literal
 from pydantic import BaseModel, Field, conlist, confloat, conint
 
 Currency = Literal["RUB", "USD", "EUR", "CNY", "GBP"]
+StatusLevel = Literal["CLEAR", "PARTIAL", "MISSING"]
 
 class Budget(BaseModel):
     have_budget: Optional[bool] = None
@@ -11,23 +12,29 @@ class Budget(BaseModel):
     amount_max: Optional[confloat(ge=0)] = None
     currency: Optional[Currency] = "RUB"
     comment: Optional[str] = None
+    budget_status: Optional[Literal["NOT_ASKED", "NO_BUDGET", "AVAILABLE"]] = None
 
 class Authority(BaseModel):
     decision_maker: Optional[str] = None
     stakeholders: Optional[List[str]] = None
     decision_process: Optional[str] = None
     risks: Optional[List[str]] = None
+    comment: Optional[str] = None
+    uncertain: Optional[bool] = None  # true если "вроде X", false если "точно X"
 
 class Need(BaseModel):
     pain_points: Optional[List[str]] = None
     current_solution: Optional[str] = None
     success_criteria: Optional[List[str]] = None
     priority: Optional[Literal["low", "medium", "high", "critical"]] = None
+    comment: Optional[str] = None
 
 class Timing(BaseModel):
-    timeframe: Optional[Literal["this_month", "this_quarter", "this_half", "this_year", "unknown"]] = None
+    timeframe: Optional[Literal["this_month", "this_quarter", "this_half", "this_year", "next_year", "unknown"]] = None
     deadline: Optional[date] = None
     next_step: Optional[str] = None
+    comment: Optional[str] = None
+    display_timeframe: Optional[str] = None  # "Конец 2025 года (осталось ~2.5 мес)"
 
 class SlotScore(BaseModel):
     value: conint(ge=0, le=100)
@@ -59,3 +66,5 @@ class SessionState(BaseModel):
     required_slots: List[str] = ["budget", "authority", "need", "timing"]
     current_slot: Optional[str] = None
     record: BantRecord
+    slot_attempts: dict[str, int] = {}  # Счетчик попыток для каждого слота
+    last_question: Optional[str] = None  # Последний заданный вопрос

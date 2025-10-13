@@ -21,11 +21,13 @@ def start_session(req: StartReq):
         st = svc.start(req.deal_id)
         from app.core.prompts import QUESTIONS
         question_text = QUESTIONS.get(st.current_slot, f"Вопрос по {st.current_slot}") if st.current_slot else "Все поля заполнены!"
+        print(f"DEBUG: current_slot = {st.current_slot}")
+        print(f"DEBUG: question_text = {repr(question_text)}")
         return {
             "session_id": st.session_id,
             "deal_id": st.deal_id,
             "current_slot": st.current_slot,
-            "question": f"Начнём с {st.current_slot.upper()}: {question_text}" if st.current_slot else "Все поля заполнены!"
+            "question": question_text if st.current_slot else "Все поля заполнены!"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
