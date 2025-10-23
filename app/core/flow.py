@@ -1,6 +1,6 @@
 # app/core/flow.py
-from app.core.prompts import QUESTIONS, FOLLOWUP_HINT, SCORING_PROMPT, FOLLOWUP_GEN_PROMPT
-from app.core.schema import SessionState, BantRecord, BantScore
+from app.core.prompts import QUESTIONS, FOLLOWUP_HINT, SCORING_PROMPT, FOLLOWUP_GEN_PROMPT, CRM_ANALYSIS_PROMPT, CRM_QUESTIONS_PROMPT
+from app.core.schema import SessionState, BantRecord, BantScore, CrmDeal
 from app.core.validator import build_parse_messages, parse_bant_json_text, parse_bant_with_llm, validate_record, refine_with_errors
 from app.core.llm import GigaChatClient
 from pydantic import ValidationError
@@ -11,6 +11,32 @@ class BantFlow:
         self.llm = llm
 
     def next_slot(self, state: SessionState) -> str | None:
+        # Если данные из CRM требуют подтверждения, всегда начинаем с первого слота
+        if hasattr(state, 'crm_data_requires_confirmation') and state.crm_data_requires_confirmation:
+            return state.required_slots[0]  # Начинаем с budget
+        
+        # Если есть скоринг, используем его для определения приоритета вопросов
+        if state.record.score:
+            # Сортируем слоты по уверенности (confidence) - сначала те, где уверенность низкая
+            slot_priorities = []
+            for s in state.required_slots:
+                slot_score = getattr(state.record.score, s)
+                # Чем ниже уверенность, тем выше приоритет для вопроса
+                priority = 1.0 - slot_score.confidence
+                slot_priorities.append((priority, s))
+            
+            # Сортируем по приоритету (сначала низкая уверенность)
+            slot_priorities.sort(key=lambda x: x[0], reverse=True)
+            
+            # Возвращаем первый слот с низкой уверенностью
+            for priority, slot in slot_priorities:
+                if priority > 0.3:  # Если уверенность меньше 70%, задаем вопрос
+                    return slot
+            
+            # Если все слоты имеют высокую уверенность, возвращаем None
+            return None
+        
+        # Fallback на старую логику, если скоринга нет
         for s in state.required_slots:
             block = getattr(state.record, s)
             block_data = block.model_dump()
@@ -47,8 +73,47 @@ class BantFlow:
                 return s
         return None
 
-    def ask_question(self, slot: str) -> str:
+    def ask_question(self, slot: str, state: SessionState = None) -> str:
+        """Генерирует вопрос с учетом CRM данных если они есть"""
+        if state and state.crm_data:
+            return self._generate_crm_aware_question(slot, state)
         return QUESTIONS.get(slot, f"Вопрос по {slot}")
+    
+    def _generate_crm_aware_question(self, slot: str, state: SessionState) -> str:
+        """Генерирует вопрос с учетом CRM данных"""
+        try:
+            crm_data = state.crm_data.model_dump()
+            bant_data = state.record.model_dump()
+            
+            # Добавляем информацию о скоринге, если он есть
+            score_info = ""
+            if state.record.score:
+                score_data = state.record.score.model_dump()
+                score_info = f"\n\n**Текущий скоринг BANT:**\n{json.dumps(score_data, ensure_ascii=False, default=str)}"
+            
+            prompt = CRM_QUESTIONS_PROMPT.format(
+                crm_data=json.dumps(crm_data, ensure_ascii=False, default=str),
+                bant_data=json.dumps(bant_data, ensure_ascii=False, default=str),
+                current_slot=slot
+            ) + score_info
+            
+            messages = [
+                {"role": "system", "content": prompt}
+            ]
+            
+            response = self.llm.chat(messages, json_mode=True)
+            result = json.loads(response)
+            
+            questions = result.get("questions", [])
+            if questions:
+                return questions[0]  # Возвращаем первый вопрос
+            
+            # Fallback на стандартный вопрос
+            return QUESTIONS.get(slot, f"Вопрос по {slot}")
+            
+        except (json.JSONDecodeError, ValidationError, KeyError):
+            # Fallback на стандартный вопрос
+            return QUESTIONS.get(slot, f"Вопрос по {slot}")
 
     def calculate_score(self, record: BantRecord) -> BantScore:
         """Рассчитывает скоринг BANT с помощью LLM"""
@@ -458,6 +523,10 @@ class BantFlow:
                     state.record.timing.comment += f"; контекст: {answer_text}"
 
     def process_answer(self, state: SessionState, answer_text: str) -> tuple[SessionState, str | None, list[str]]:
+        # Сбрасываем флаг подтверждения CRM данных после ответа менеджера
+        if hasattr(state, 'crm_data_requires_confirmation'):
+            state.crm_data_requires_confirmation = False
+        
         # 1) извлечь JSON с использованием json_mode
         try:
             data = parse_bant_with_llm(self.llm, answer_text)
@@ -529,9 +598,9 @@ class BantFlow:
         state.current_slot = slot
         state.slot_attempts[slot] = attempts + 1
 
-        # 4) Генерируем вопрос с учетом попыток
+        # 4) Генерируем вопрос с учетом попыток и CRM данных
         if attempts == 0:
-            next_question = self.ask_question(slot)
+            next_question = self.ask_question(slot, state)
         else:
             next_question = self._generate_rephrased_question(slot, attempts, state)
         

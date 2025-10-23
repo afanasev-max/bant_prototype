@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 
 # Конфигурация
-API_BASE = os.getenv("API_BASE", "http://localhost:8000")
+API_BASE = os.getenv("API_BASE", "http://localhost/api")
 print(f"DEBUG: API_BASE = {API_BASE}")
 print(f"DEBUG: os.getenv('API_BASE') = {os.getenv('API_BASE')}")
 
@@ -30,12 +30,16 @@ def init_session_state():
         st.session_state.record = None
     if "filled" not in st.session_state:
         st.session_state.filled = "none"
+    if "crm_data" not in st.session_state:
+        st.session_state.crm_data = None
+    if "crm_uploaded" not in st.session_state:
+        st.session_state.crm_uploaded = False
 
 def start_session(deal_id: str):
     """Начать новую сессию"""
     try:
         st.write(f"🔍 Отправляю запрос на: {API_BASE}/sessions/start")
-        response = requests.post(f"{API_BASE}/sessions/start", json={"deal_id": deal_id})
+        response = requests.post(f"{API_BASE}/sessions/start", json={"deal_id": deal_id}, auth=("admin", "password"))
         if response.status_code == 200:
             data = response.json()
             st.session_state.session_id = data["session_id"]
@@ -44,9 +48,41 @@ def start_session(deal_id: str):
             st.session_state.history = []
             st.session_state.record = None
             st.session_state.filled = "none"
+            st.session_state.crm_data = None
+            st.session_state.crm_uploaded = False
             return True
         else:
             st.error(f"Ошибка при создании сессии: {response.text}")
+            return False
+    except Exception as e:
+        st.error(f"Ошибка подключения к API: {str(e)}")
+        return False
+
+def upload_crm_data(crm_data: dict):
+    """Загрузить данные CRM"""
+    try:
+        response = requests.post(
+            f"{API_BASE}/sessions/{st.session_state.session_id}/upload-crm",
+            json={"crm_data": crm_data},
+            auth=("admin", "password")
+        )
+        if response.status_code == 200:
+            data = response.json()
+            st.session_state.crm_data = data.get("crm_data")
+            st.session_state.crm_uploaded = True
+            st.session_state.current_question = data.get("next_question", "")
+            
+            # Обновляем статус заполнения из API
+            status_response = requests.get(f"{API_BASE}/sessions/{st.session_state.session_id}/status", auth=("admin", "password"))
+            if status_response.status_code == 200:
+                status_data = status_response.json()
+                st.session_state.filled = status_data.get("filled", "none")
+                st.session_state.record = status_data.get("record")
+                st.session_state.score = status_data.get("score")
+            
+            return True
+        else:
+            st.error(f"Ошибка при загрузке CRM данных: {response.text}")
             return False
     except Exception as e:
         st.error(f"Ошибка подключения к API: {str(e)}")
@@ -57,7 +93,8 @@ def send_answer(text: str):
     try:
         response = requests.post(
             f"{API_BASE}/sessions/{st.session_state.session_id}/answer",
-            json={"text": text}
+            json={"text": text},
+            auth=("admin", "password")
         )
         if response.status_code == 200:
             data = response.json()
@@ -78,7 +115,7 @@ def send_answer(text: str):
 def get_session_status():
     """Получить статус сессии"""
     try:
-        response = requests.get(f"{API_BASE}/sessions/{st.session_state.session_id}/status")
+        response = requests.get(f"{API_BASE}/sessions/{st.session_state.session_id}/status", auth=("admin", "password"))
         if response.status_code == 200:
             return response.json()
         return None
@@ -582,6 +619,44 @@ def main():
                 st.success("Сессия создана! Начинаем опрос.")
                 st.rerun()
     
+    # Если есть активная сессия, но нет CRM данных
+    elif st.session_state.session_id and not st.session_state.crm_uploaded:
+        st.subheader("📁 Загрузка данных CRM (опционально)")
+        st.info("Вы можете загрузить данные из CRM для автоматического заполнения BANT полей, или пропустить этот шаг.")
+        
+        # Загрузка JSON файла
+        uploaded_file = st.file_uploader(
+            "Выберите JSON файл с данными CRM",
+            type=['json'],
+            help="Загрузите JSON файл с данными сделки из CRM системы"
+        )
+        
+        if uploaded_file is not None:
+            try:
+                # Читаем и парсим JSON
+                crm_data = json.load(uploaded_file)
+                
+                # Показываем превью данных
+                st.subheader("📋 Превью данных CRM")
+                st.json(crm_data)
+                
+                if st.button("Загрузить данные CRM", type="primary"):
+                    if upload_crm_data(crm_data):
+                        st.success("Данные CRM загружены! Начинаем опрос.")
+                        st.rerun()
+                    else:
+                        st.error("Ошибка при загрузке данных CRM.")
+                
+            except json.JSONDecodeError:
+                st.error("❌ Некорректный JSON файл. Пожалуйста, проверьте формат файла.")
+            except Exception as e:
+                st.error(f"❌ Ошибка при обработке файла: {str(e)}")
+        
+        # Кнопка пропуска загрузки CRM
+        if st.button("Пропустить загрузку CRM", type="secondary"):
+            st.session_state.crm_uploaded = True
+            st.rerun()
+    
     # Если есть активная сессия
     else:
         col1, col2 = st.columns([3, 1])
@@ -623,6 +698,12 @@ def main():
                 else:
                     st.write(f"**Система:** {message}")
         
+        # Отображение CRM данных если есть
+        if st.session_state.crm_data:
+            st.subheader("🏢 Данные CRM")
+            with st.expander("Показать данные CRM", expanded=False):
+                st.json(st.session_state.crm_data)
+        
         # Отображение статуса BANT
         if st.session_state.record:
             display_bant_status(st.session_state.record)
@@ -632,13 +713,13 @@ def main():
                 display_scoring(st.session_state.record["score"])
             
             # JSON превью
-            st.subheader("📄 JSON данные")
+            st.subheader("📄 JSON данные BANT")
             st.json(st.session_state.record)
             
             # Кнопка экспорта
             json_str = json.dumps(st.session_state.record, ensure_ascii=False, indent=2)
             st.download_button(
-                label="📥 Скачать JSON",
+                label="📥 Скачать JSON BANT",
                 data=json_str,
                 file_name=f"bant_{st.session_state.deal_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json"

@@ -1,6 +1,6 @@
 # app/core/schema.py
 from datetime import date, datetime, timezone
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Union
 from pydantic import BaseModel, Field, conlist, confloat, conint
 
 Currency = Literal["RUB", "USD", "EUR", "CNY", "GBP"]
@@ -59,6 +59,50 @@ class BantRecord(BaseModel):
     score: Optional[BantScore] = None
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+# CRM Data Schema
+class CrmDeal(BaseModel):
+    """Схема для данных сделки из CRM"""
+    deal_id: Optional[Union[int, str]] = None
+    deal_name: Optional[str] = None
+    company_official: Optional[str] = None
+    company_short: Optional[str] = None
+    end_customer: Optional[str] = None
+    expected_contract_date: Optional[str] = None
+    responsible: Optional[str] = None
+    competence_center: Optional[str] = None
+    lead_source: Optional[str] = None
+    deal_form: Optional[str] = None
+    probability_type: Optional[str] = None
+    stage: Optional[str] = None
+    stage_date: Optional[str] = None
+    deal_status: Optional[str] = None
+    currency: Optional[str] = None
+    stage_probability: Optional[str] = None
+    expected_revenue_with_vat: Optional[float] = None
+    expected_revenue_without_vat: Optional[float] = None
+    estimated_margin_gm1: Optional[float] = None
+    deal_type: Optional[str] = None
+    legal_entity: Optional[str] = None
+    direction: Optional[str] = None
+    contract_end_date: Optional[str] = None
+    renewal_order: Optional[str] = None
+    product_amount_with_vat: Optional[float] = None
+    key_deal: Optional[Union[bool, str]] = None
+    vat_rate: Optional[str] = None
+    war: Optional[str] = None
+    business_unit: Optional[str] = None
+    project_stage_code: Optional[str] = None
+    customer_request_number: Optional[str] = None
+    max_limit: Optional[float] = None
+    partners: Optional[str] = None
+    tender_request_type: Optional[str] = None
+    tender_submission_date: Optional[str] = None
+    loss_reason: Optional[str] = None
+    closing_comment: Optional[str] = None
+    closing_action: Optional[str] = None
+    change_date: Optional[str] = None
+    lead_id: Optional[Union[int, str]] = None
+
 class SessionState(BaseModel):
     session_id: str
     deal_id: str
@@ -68,3 +112,5 @@ class SessionState(BaseModel):
     record: BantRecord
     slot_attempts: dict[str, int] = {}  # Счетчик попыток для каждого слота
     last_question: Optional[str] = None  # Последний заданный вопрос
+    crm_data: Optional[CrmDeal] = None  # Данные из CRM
+    crm_data_requires_confirmation: bool = False  # Требуется ли подтверждение данных из CRM
